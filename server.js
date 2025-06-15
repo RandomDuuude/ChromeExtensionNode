@@ -4,26 +4,13 @@ const bodyParser = require("body-parser");
 const multer = require("multer");
 const path = require("path");
 const axios = require("axios");
-const fs = require("fs");
+const { log } = require("console");
 const upload = multer({ dest: "uploads/" });
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
-// Function to convert image URL to binary data
-async function getImageBinary(imageUrl) {
-  if (imageUrl.startsWith("http")) {
-    const response = await axios.get(imageUrl, { responseType: "arraybuffer" });
-    return Buffer.from(response.data).toString("base64");
-  } else {
-    // For local files
-    const localPath = imageUrl.replace("http://localhost:3000", "");
-    const fullPath = path.join(__dirname, localPath);
-    return fs.readFileSync(fullPath).toString("base64");
-  }
-}
 
 // Endpoint to receive product data with multiple images
 app.post("/store-product", async (req, res) => {
@@ -32,35 +19,40 @@ app.post("/store-product", async (req, res) => {
   console.log("Received product data:");
   console.log("Title:", title);
   console.log("Keyword:", keyword);
-  console.log("Images:", images); // Logs all image URLs
-  const now = new Date();
-  console.log(
-    `Current Time: ${now.getHours()}:${now.getMinutes()}:${now.getSeconds()}`
-  );
+  console.log("Images:", images);
 
   try {
-    // Convert all images to binary
-    const binaryImages = await Promise.all(images.map(getImageBinary));
+    // Download each image as a buffer (blob)
+    const imageBlobs = await Promise.all(
+      images.map(async (url) => {
+        const response = await axios.get(url, { responseType: "arraybuffer" });
+        return Buffer.from(response.data, "binary");
+      })
+    );
+    try {
+      // Send data to detection endpoint
+      const response = await axios.post("http://localhost:6000/detect", {
+        keyword,
+        imageBlobs,
+      });
 
-    // Send data to detection endpoint
-    console.log(binaryImages);
-    const response = await axios.post("http://192.168.26.159:5000/detect", {
-      title,
-      images: binaryImages,
-      keyword,
-    });
-
-    res.json({
-      message: "Product data received and sent to detection!",
-      data: { title, images, keyword },
-      detectionResponse: response.data,
-    });
+      res.json({
+        message: "Product data received and sent to detection!",
+        data: { keyword, imageBlobs },
+        detectionResponse: response.data,
+      });
+      console.log(res);
+      console.log("Sent to detect");
+    } catch (error) {
+      console.error("Error sending data to detection:", error);
+      res.status(500).json({
+        message: "Error sending data to detection",
+        error: error.message,
+      });
+    }
   } catch (error) {
-    console.error("Error processing request:", error);
-    res.status(500).json({
-      message: "Error processing request",
-      error: error.message,
-    });
+    console.error("Error downloading images:", error);
+    return res.status(500).send("Failed to download one or more images.");
   }
 });
 
@@ -71,27 +63,28 @@ app.post("/getImage", upload.single("filename"), async (req, res) => {
   }
 
   // Create the full URL for accessing the image
-  const imageUrl = `http://localhost:3000/uploads/${req.file.filename}`;
+  let imageUrl = `http://localhost:3000/uploads/${req.file.filename}`;
   console.log(imageUrl);
 
   try {
-    // Convert uploaded image to binary
-    const binaryImage = await getImageBinary(imageUrl);
-
-    // Send the image binary to detection endpoint
-    const response = await axios.post("http://192.168.26.159:5000/detect", {
-      images: [binaryImage],
+    image = await axios.get(imageUrl, { responseType: "arraybuffer" });
+    imageUrl = Buffer.from(image.data);
+    console.log(imageUrl);
+    console.log("Hello 2469950" + imageUrl.data);
+    // Send data to detection endpoint
+    const response = await axios.post("http://localhost:6000/background", {
+      imageUrl,
     });
-
-    res.send({
-      message: "File uploaded successfully and sent to detection!",
-      imageUrl: imageUrl,
+    res.json({
+      message: "Product data received and sent to detection!",
+      data: imageUrl,
       detectionResponse: response.data,
     });
+    console.log("Sent to detect");
   } catch (error) {
-    console.error("Error processing image:", error);
+    console.error("Error sending data to detection:", error);
     res.status(500).json({
-      message: "Error processing image",
+      message: "Error sending data to detection",
       error: error.message,
     });
   }
